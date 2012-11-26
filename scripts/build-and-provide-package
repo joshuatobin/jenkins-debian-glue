@@ -33,6 +33,27 @@ checks_and_defaults() {
   if [ -z "${REPOSITORY:-}" ] ; then
     REPOSITORY='/srv/repository'
   fi
+
+  if [ -n "${ARCHIVEDIR:-}" ] ; then
+    echo "Found environment variable ARCHIVEDIR, set to ${ARCHIVEDIR}"
+  else
+    ARCHIVEDIR="${REPOSITORY}/apt"
+    echo "Using default ARCHIVEDIR: (${ARCHIVEDIR})"
+  fi
+
+  if [ -n "${CACHEDIR:-}" ] ; then
+    echo "Found environment variable CACHEDIR, set to ${CACHEDIR}"
+  else
+    CACHEDIR="${REPOSITORY}/apt/.cache"
+    echo "Using default CACHEDIR: (${CACHEDIR})"
+  fi
+
+  if [ -n "${POOL:-}" ] ; then
+    echo "Found environment variable POOL, set to ${POOL}"
+  else
+    POOL="main"
+    echo "Using default Pool: (${POOL})"
+  fi
 }
 
 clean_workspace() {
@@ -469,6 +490,93 @@ build_info
 identify_sourcefile
 dist_and_arch_settings
 
+apt_ftparchive_init() {
+  if ! ${SUDO_CMD:-} mkdir -p "${ARCHIVEDIR}" ; then
+    echo "Error creating ${ARCHIVEDIR} (forgot to create ${REPOSITORY} and chown jenkins?)" >&2
+    exit 1
+  fi
+
+  if ! ${SUDO_CMD:-} mkdir -p "${CACHEDIR}" ; then
+    echo "Error creating ${CACHEDIR} (forgot to create ${REPOSITORY} and chown jenkins?)" >&2
+    exit 1
+  fi
+
+  if ! ${SUDO_CMD:-} mkdir -p "${ARCHIVEDIR}/pool/${POOL}" ; then
+    echo "Error creating pool directory:"${ARCHIVEDIR}/pool/${POOL}" (forgot to create ${REPOSITORY} and chown jenkins?)" >&2
+    exit 1
+  fi
+
+  if ! ${SUDO_CMD:-} mkdir -p "${ARCHIVEDIR}/dists/$REPOS/$POOL/binary-amd64" ; then
+    echo "Error creating directory: "${ARCHIVEDIR}/dists/${REPOS}/${POOL}/binary-amd64" (forgot to create ${REPOSITORY} and chown jenkins?)" >&2
+    exit 1
+  fi
+
+  if ! ${SUDO_CMD:-} mkdir -p "${ARCHIVEDIR}/dists/$REPOS/$POOL/binary-i386" ; then
+    echo "Error creating directory: "${ARCHIVEDIR}/dists/${REPOS}/${POOL}/binary-i386" (forgot to create ${REPOSITORY} and chown jenkins?)" >&2
+    exit 1
+  fi
+}
+
+apt_repository_conf_init() {
+  if [ ! -f ${ARCHIVEDIR}/apt-repository-${REPOS}.conf ]; then
+    echo "apt-ftpachive configuration  not found. Creating: ${ARCHIVEDIR}/apt-repository-${REPOS}.conf"
+    cat > "${ARCHIVEDIR}"/apt-repository-${REPOS}.conf << EOF
+Dir {   
+        ArchiveDir "${ARCHIVEDIR}";
+        CacheDir "${CACHEDIR}";
+};
+
+Default {
+        Packages::Compress ". gzip bzip2";
+        Contents::Compress ". gzip bzip2";
+};
+
+TreeDefault {
+        BinCacheDB "${ARCHIVEDIR}/packages-\$(SECTION)-\$(ARCH).db";
+        Directory "${ARCHIVEDIR}/pool/\$(SECTION)";
+        Packages "${ARCHIVEDIR}/\$(DIST)/\$(SECTION)/binary-\$(ARCH)/Packages";
+        Contents "${ARCHIVEDIR}/\$(DIST)/Contents-\$(ARCH)";
+};
+
+Tree "dists/${REPOS}" {
+        Sections "main";
+        Architectures "i386 amd64";
+};
+EOF
+  fi
+}
+
+apt_release_conf_init() {
+  if [ ! -f ${ARCHIVEDIR}/apt-release-${REPOS}.conf ]; then
+    echo "apt-release-${REPOS}.conf not found. Creating: ${ARCHIVEDIR}/apt-release-${REPOS}.conf"
+    cat > "${ARCHIVEDIR}"/apt-release-${REPOS}.conf << EOF
+APT::FTPArchive::Release::Origin: "${APT_ORIGIN}";
+APT::FTPArchive::Release::Label: "${APT_LABEL}";
+APT::FTPArchive::Release::Suite: "${APT_SUITE}";
+APT::FTPArchive::Release::Codename: "${APT_CODENAME:-$REPOS}";
+APT::FTPArchive::Release::Version: "${APT_VER}";
+APT::FTPArchive::Release::Architectures: "${APT_ARCH}";
+APT::FTPArchive::Release::Components: "${APT_COMPONENT:-$POOL}";
+APT::FTPArchive::Release::Description: "${APT_DESC}";
+EOF
+  fi
+}
+
+copy_apt_binaries() {
+  cp "${WORKSPACE}/binaries/"*.deb "${ARCHIVEDIR}/pool/${POOL}/"
+  [ $? -eq 0 ] || bailout 1 "Error: Failed to copy binary packages to ${ARCHIVEDIR}/pool/${POOL}/"
+}
+
+generate_apt_repo() {
+  APT=$(which apt-ftparchive)
+  ${SUDO_CMD:-} ${APT} generate ${ARCHIVEDIR}/apt-repository-${REPOS}.conf
+}
+
+generate_release() {
+  APT=$(which apt-ftparchive)
+  ${SUDO_CMD:-} ${APT} -c ${ARCHIVEDIR}/apt-release-${REPOS}.conf release ${ARCHIVEDIR}/dists/${REPOS} > ${ARCHIVEDIR}/dists/${REPOS}/Release
+}
+
 # do not run in repos job?
 if [ -n "${PROVIDE_ONLY:-}" ] ; then
   echo "*** Config variable 'PROVIDE_ONLY' is set, ignoring request to run cowbuilder. ***"
@@ -480,6 +588,14 @@ fi
 # do not run in binaries job?
 if [ -n "${BUILD_ONLY:-}" ] ; then
   echo "*** Config variable 'BUILD_ONLY' is set, ignoring request to use local repository. ***"
+elif [ "${APT_FTPARCHIVE:-}" = "true" ] ; then
+  echo "Using APT-FTPARCHIVE to generate apt repo"
+  apt_ftparchive_init
+  apt_repository_conf_init
+  apt_release_conf_init
+  copy_apt_binaries
+  generate_apt_repo
+  generate_release
 else
   deploy_to_releases
 fi

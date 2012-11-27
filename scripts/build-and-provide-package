@@ -501,7 +501,7 @@ apt_ftparchive_init() {
     exit 1
   fi
 
-  if ! ${SUDO_CMD:-} mkdir -p "${ARCHIVEDIR}/pool/${POOL}" ; then
+  if ! ${SUDO_CMD:-} mkdir -p "${ARCHIVEDIR}/pool/${POOL}/${REPOS}" ; then
     echo "Error creating pool directory:"${ARCHIVEDIR}/pool/${POOL}" (forgot to create ${REPOSITORY} and chown jenkins?)" >&2
     exit 1
   fi
@@ -533,7 +533,7 @@ Default {
 
 TreeDefault {
         BinCacheDB "${ARCHIVEDIR}/packages-\$(SECTION)-\$(ARCH).db";
-        Directory "${ARCHIVEDIR}/pool/\$(SECTION)";
+        Directory "${ARCHIVEDIR}/pool/\$(SECTION)/${REPOS}";
         Packages "${ARCHIVEDIR}/\$(DIST)/\$(SECTION)/binary-\$(ARCH)/Packages";
         Contents "${ARCHIVEDIR}/\$(DIST)/Contents-\$(ARCH)";
 };
@@ -563,7 +563,7 @@ EOF
 }
 
 copy_apt_binaries() {
-  cp "${WORKSPACE}/binaries/"*.deb "${ARCHIVEDIR}/pool/${POOL}/"
+  cp "${WORKSPACE}/binaries/"*.deb "${ARCHIVEDIR}/pool/${POOL}/${REPOS}/"
   [ $? -eq 0 ] || bailout 1 "Error: Failed to copy binary packages to ${ARCHIVEDIR}/pool/${POOL}/"
 }
 
